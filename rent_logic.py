@@ -13,7 +13,7 @@ from calendar import month_name
 from datetime import datetime
 from typing import Iterable
 
-from centers_data import CABINS_BY_CENTER
+from center_config_service import get_cabins_for_center, resolve_cabin_name_dynamic
 from config import IST
 from sheets_client import append_row, get_all_data_rows
 
@@ -101,9 +101,10 @@ def unpaid_for_month(center_name: str, month: int, year: int) -> list[str]:
     """
     Cabins in center_name that have no ledger payment with timestamp in (month, year) IST.
 
-    Compares against master list in CABINS_BY_CENTER.
+    Compares against dynamic list from Center Config worksheet.
     """
-    master = set(CABINS_BY_CENTER.get(center_name, []))
+    master_list = get_cabins_for_center(center_name)
+    master = set(master_list)
     if not master:
         return []
 
@@ -121,6 +122,8 @@ def unpaid_for_month(center_name: str, month: int, year: int) -> list[str]:
         if dt is None:
             continue
         if dt.month == month and dt.year == year:
-            paid.add(cid_norm)
+            resolved_cabin = resolve_cabin_name_dynamic(center_name, cid_norm)
+            if resolved_cabin:
+                paid.add(resolved_cabin)
 
     return sorted(master - paid, key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else x))

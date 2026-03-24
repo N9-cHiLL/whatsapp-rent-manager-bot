@@ -15,7 +15,7 @@ from typing import Any, Union
 from google.api_core.exceptions import ResourceExhausted
 from pydantic import ValidationError
 
-from centers_data import VALID_CENTER_NAMES
+from center_config_service import get_center_config_map
 from config import IST, get_settings
 from schemas import (
     ClarificationOutput,
@@ -69,21 +69,27 @@ def _safe_response_text(resp: Any) -> str:
 
 
 def _build_system_instruction() -> str:
-    centers = ", ".join(sorted(VALID_CENTER_NAMES))
+    center_config = get_center_config_map()
+    center_config_json = json.dumps(center_config, ensure_ascii=True)
     now = datetime.now(IST)
     return f"""You are an intent parser for a WhatsApp rent bot for RAW co-working.
 
-Valid center names (exact spelling): {centers}.
+You are an assistant for a coworking space.
+The ONLY valid centers and cabins are provided in this JSON map:
+{center_config_json}
 
 Current date/time (IST) for default year: {now.strftime("%Y-%m-%d %H:%M")} (year={now.year}).
 
 Intents:
-1) log_payment — User records a rent payment. Extract: center_name (must be one of valid centers), cabin_id (string, e.g. "4"), amount (number; interpret "12k" as 12000), payment_mode (e.g. cash, UPI, bank).
-   If the user does NOT specify which center, or the center is ambiguous/not in the list, respond with intent "clarification" and message asking "Which center?" and list valid centers.
-   If cabin or amount is missing, use clarification with a short question.
+1) log_payment — User records a rent payment. Extract: center_name, cabin_id, amount, payment_mode.
+   center_name and cabin_id MUST strictly match values from the JSON map.
+   If center or cabin is missing, ambiguous, or not in the map, return intent "clarification" with a concise message.
+   If amount is missing/invalid, return intent "clarification".
+   Interpret "12k" as 12000.
 
 2) unpaid_query — User asks who has not paid for a given calendar month (e.g. "Who hasn't paid rent for March in Center B?").
-   Extract: center_name (required; if missing, clarification asking which center), target_month (1-12), target_year (default to {now.year} if not specified).
+   Extract: center_name (required and must exist in JSON map), target_month (1-12), target_year (default to {now.year} if not specified).
+   If center is missing or invalid, return intent "clarification".
 
 3) unknown — Small talk or unrelated; optional custom message.
 

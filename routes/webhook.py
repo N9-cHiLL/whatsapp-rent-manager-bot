@@ -5,7 +5,13 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from centers_data import CABINS_BY_CENTER, VALID_CENTER_NAMES, resolve_center_name
+from center_config_service import (
+    get_cabins_for_center,
+    get_valid_centers,
+    refresh_center_config_cache,
+    resolve_cabin_name_dynamic,
+    resolve_center_name_dynamic,
+)
 from config import get_settings
 from gemini_client import parse_message
 from rent_logic import append_payment, unpaid_for_month
@@ -31,6 +37,24 @@ def _first(params: dict[str, list[str]], key: str) -> str:
 @router.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.post("/admin/refresh-center-config")
+async def refresh_center_config(request: Request) -> dict:
+    settings = get_settings()
+    expected = (settings.center_config_refresh_token or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=500,
+            detail="CENTER_CONFIG_REFRESH_TOKEN is not configured.",
+        )
+
+    provided = (request.headers.get("X-Admin-Token") or "").strip()
+    if provided != expected:
+        raise HTTPException(status_code=403, detail="Invalid admin token.")
+
+    refreshed = refresh_center_config_cache()
+    return {"status": "ok", "centers_count": len(refreshed)}
 
 
 @router.post("/webhook")
@@ -98,15 +122,15 @@ async def twilio_webhook(request: Request) -> Response:
 
 
 async def _handle_payment(p: PaymentIntentOutput) -> str:
-    resolved = resolve_center_name(p.center_name)
+    resolved = resolve_center_name_dynamic(p.center_name)
     if not resolved:
-        valid = ", ".join(sorted(VALID_CENTER_NAMES))
+        valid = ", ".join(get_valid_centers())
         return f"Which center? Please use one of: {valid}"
 
     center = resolved
-    cabins = CABINS_BY_CENTER[center]
-    cid = (p.cabin_id or "").strip()
-    if not cid or cid not in cabins:
+    cabins = get_cabins_for_center(center)
+    cid = resolve_cabin_name_dynamic(center, p.cabin_id)
+    if not cid:
         return f"Invalid cabin for {center}. Valid cabins: {', '.join(cabins)}"
 
     if p.amount is None or p.amount <= 0:
@@ -131,9 +155,9 @@ async def _handle_payment(p: PaymentIntentOutput) -> str:
 
 
 async def _handle_unpaid(p: UnpaidQueryOutput) -> str:
-    resolved = resolve_center_name(p.center_name)
+    resolved = resolve_center_name_dynamic(p.center_name)
     if not resolved:
-        valid = ", ".join(sorted(VALID_CENTER_NAMES))
+        valid = ", ".join(get_valid_centers())
         return f"Which center? Please use one of: {valid}"
 
     from calendar import month_name
@@ -152,7 +176,23 @@ async def _handle_unpaid(p: UnpaidQueryOutput) -> str:
             f"for {center} (by ledger date in IST)."
         )
 
-    cabin_list = ", ".join(
-        f"Cabin {c}" for c in sorted(unpaid, key=lambda x: (not str(x).isdigit(), int(x) if str(x).isdigit() else x))
+    def _display_unit(label: str) -> str:
+        s = str(label).strip()
+        # If config uses numeric-only cabin IDs, keep user-friendly "Cabin N".
+        # Otherwise, return canonical label as configured (e.g. "Cabin 10", "Studio 4").
+        if s.isdigit():
+            return f"Cabin {s}"
+        return s
+
+    ordered_unpaid = sorted(
+        unpaid,
+        key=lambda x: (not str(x).isdigit(), int(x) if str(x).isdigit() else str(x).lower()),
     )
-    return f"⚠️ Unpaid for {month_label} in {center}: {cabin_list}"
+    lines = [f"{idx}. {_display_unit(c)}" for idx, c in enumerate(ordered_unpaid, start=1)]
+    return (
+        f"Unpaid Units Report\n"
+        f"Center: {center}\n"
+        f"Month: {month_label} {p.target_year}\n"
+        f"Total unpaid: {len(ordered_unpaid)}\n\n"
+        f"{chr(10).join(lines)}"
+    )

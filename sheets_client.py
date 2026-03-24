@@ -37,19 +37,29 @@ def _get_credentials():
     )
 
 
-def get_worksheet():
+def get_worksheet(worksheet_name: str | None = None, spreadsheet_id: str | None = None):
     settings = get_settings()
     gc = gspread.authorize(_get_credentials())
-    sh = gc.open_by_key(settings.spreadsheet_id)
-    return sh.worksheet(settings.rent_ledger_worksheet)
+    sh = gc.open_by_key(spreadsheet_id or settings.spreadsheet_id)
+    return sh.worksheet(worksheet_name or settings.rent_ledger_worksheet)
 
 
 def append_row(values: list) -> None:
-    ws = get_worksheet()
+    ws = get_worksheet(get_settings().rent_ledger_worksheet)
     ws.append_row(values, value_input_option="USER_ENTERED")
 
 
 def get_all_data_rows() -> list[list]:
     """Return all rows including header."""
-    ws = get_worksheet()
+    ws = get_worksheet(get_settings().rent_ledger_worksheet)
+    return ws.get_all_values()
+
+
+def get_center_config_rows() -> list[list]:
+    """Return all rows from the Center Config worksheet, including header if present."""
+    settings = get_settings()
+    ws = get_worksheet(
+        settings.center_config_worksheet,
+        spreadsheet_id=settings.center_config_spreadsheet_id or settings.spreadsheet_id,
+    )
     return ws.get_all_values()
